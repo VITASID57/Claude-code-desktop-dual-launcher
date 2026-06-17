@@ -41,8 +41,8 @@ back. You can also invoke it directly: `/claude-desktop-dual-launcher work`.
 Just clone the repo and run the PowerShell script directly:
 
 ```powershell
-git clone https://github.com/VITASID57/Owned-by-AI-.git
-cd Owned-by-AI-
+git clone https://github.com/VITASID57/Claude-code-desktop-dual-launcher.git
+cd Claude-code-desktop-dual-launcher
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -InstanceName "work"
 ```
 
