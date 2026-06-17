@@ -1,4 +1,4 @@
-# uninstall.ps1 — Remove a Claude Desktop instance created by setup.ps1
+# uninstall.ps1 - Remove a Claude Desktop instance created by setup.ps1
 #
 # Usage:
 #   .\uninstall.ps1 -InstanceName "secondary"

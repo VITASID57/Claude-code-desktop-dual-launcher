@@ -1,4 +1,4 @@
-# setup.ps1 — Create a new Claude Desktop instance with its own user-data-dir
+# setup.ps1 - Create a new Claude Desktop instance with its own user-data-dir
 #
 # Usage:
 #   .\setup.ps1                              # creates instance "secondary"
@@ -49,7 +49,7 @@ $userDataDir  = Join-Path $UserDataRoot "Claude-$InstanceName"
 $launcherPath = Join-Path $InstallDir "launch-$InstanceName.ps1"
 
 Write-Host ""
-Write-Host "Claude Desktop dual-launcher — setup" -ForegroundColor White
+Write-Host "Claude Desktop dual-launcher - setup" -ForegroundColor White
 Write-Host "Instance name : $InstanceName"
 Write-Host "User-data-dir : $userDataDir"
 Write-Host "Launcher path : $launcherPath"
@@ -124,5 +124,5 @@ Write-Host ""
 if (-not $SkipLaunch) {
     Write-Step "Launching new instance..."
     Start-Process -FilePath $claudeExe -ArgumentList "--user-data-dir=`"$userDataDir`""
-    Write-OK "Launched. A blank Claude window should appear — log in with the second account."
+    Write-OK "Launched. A blank Claude window should appear - log in with the second account."
 }

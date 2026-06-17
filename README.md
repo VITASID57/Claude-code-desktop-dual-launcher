@@ -1,5 +1,7 @@
 # Claude Desktop Dual Launcher (Windows)
 
+![Two Claude Desktop instances running side by side](./screenshots/demo.png)
+
 Run **two (or more) Claude Desktop accounts side by side** on Windows — each
 with its own login, chat history, and local state. Useful when you have two
 Pro subscriptions, want a clean work/personal split, or you've hit a usage
