@@ -1,0 +1,20 @@
+# Local test artifacts
+*.log
+*.tmp
+*.bak
+*~
+
+# Generated launcher templates (the *.ps1 in scripts/ are templates, but if any
+# user accidentally drops their generated launch-<name>.ps1 here, gitignore it)
+scripts/launch-*.ps1
+!scripts/launch.ps1
+
+# Windows nuisance files
+Thumbs.db
+desktop.ini
+
+# Editor / OS junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
