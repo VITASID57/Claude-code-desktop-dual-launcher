@@ -81,15 +81,21 @@ just an isolated storage location; which account is logged into it is up to you.
 
 ## When Claude Desktop updates
 
-**Since v1.1, the desktop shortcut survives Claude updates automatically.** It
-goes through the self-healing launcher script (`%USERPROFILE%\.claude-dual-launcher\launch-<name>.ps1`),
-which re-scans `WindowsApps\Claude_*` at every launch and picks the latest
-installed version. You don't need to do anything when Claude updates.
+The desktop shortcut hardcodes the current Claude.exe path including its
+version number (e.g. `Claude_1.12603.1.0_x64__...`). When Claude updates, the
+version number changes and the shortcut breaks.
 
-(Shortcuts created by the older `setup.ps1` v1.0 pointed directly at a
-versioned `Claude.exe` and broke on every Claude update — if you have one of
-those, re-run setup once with `-Force` to upgrade it to the self-healing
-shortcut.)
+Two fixes:
+
+1. **Run the self-healing launcher directly.** Right-click
+   `%USERPROFILE%\.claude-dual-launcher\launch-<name>.ps1` → *Run with
+   PowerShell*. This script scans `WindowsApps\Claude_*` at runtime, so it
+   always finds the newest version.
+
+2. **Re-run setup** to refresh the shortcut:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -InstanceName "work" -Force
+   ```
 
 ## Adding more instances
 
