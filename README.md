@@ -57,11 +57,20 @@ account, and a `Claude (work).lnk` shortcut appears on your desktop.
 
 After running `setup.ps1 -InstanceName work`:
 
+**Per-instance:**
+
 | Path | Purpose |
 |---|---|
 | `%APPDATA%\Claude-work\` | The new instance's user-data-dir (OAuth, chat history, etc.) |
-| `%USERPROFILE%\.claude-dual-launcher\launch-work.ps1` | Self-healing launcher (survives Claude updates) |
-| `Desktop\Claude (work).lnk` | Desktop shortcut, double-click to launch |
+| `Desktop\Claude (work).lnk` | Desktop shortcut targeting `current\Claude.exe` (through the junction below) |
+
+**Shared infrastructure (created once, reused by all instances):**
+
+| Path | Purpose |
+|---|---|
+| `%USERPROFILE%\.claude-dual-launcher\current\` | NTFS junction → `<latest>\Claude_*\app\` |
+| `%USERPROFILE%\.claude-dual-launcher\refresh-junction.bat` | Re-points the junction at the newest installed Claude |
+| Task Scheduler: `ClaudeDualLauncher-JunctionRefresh` | Runs the .bat on every user logon |
 
 The original Claude Desktop (launched from the Start menu / pinned taskbar
 icon) is unchanged — it keeps using the default `%APPDATA%\Claude\`.
@@ -81,21 +90,22 @@ just an isolated storage location; which account is logged into it is up to you.
 
 ## When Claude Desktop updates
 
-The desktop shortcut hardcodes the current Claude.exe path including its
-version number (e.g. `Claude_1.12603.1.0_x64__...`). When Claude updates, the
-version number changes and the shortcut breaks.
+**You don't have to do anything.** Each shortcut targets
+`%USERPROFILE%\.claude-dual-launcher\current\Claude.exe` — a path that
+doesn't include the Claude version number. The `current\` directory is an
+NTFS junction that's re-pointed at the newest installed `Claude_<version>\app\`
+folder on every user logon by a small `.bat` script driven by Task Scheduler.
 
-Two fixes:
+So whenever Claude auto-updates:
 
-1. **Run the self-healing launcher directly.** Right-click
-   `%USERPROFILE%\.claude-dual-launcher\launch-<name>.ps1` → *Run with
-   PowerShell*. This script scans `WindowsApps\Claude_*` at runtime, so it
-   always finds the newest version.
+1. The next time you log into Windows, the logon-triggered task notices the
+   new `Claude_<new-version>\` folder and re-creates the junction to point
+   at it.
+2. Double-clicking the desktop shortcut just works — same icon, same
+   instant launch.
 
-2. **Re-run setup** to refresh the shortcut:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -InstanceName "work" -Force
-   ```
+No PowerShell, no VBS, no scripts at click-time — so heuristic antivirus
+software (Defender, 火绒, 360, etc.) doesn't flag the shortcut as suspicious.
 
 ## Adding more instances
 
@@ -113,9 +123,16 @@ shortcut.
 .\scripts\uninstall.ps1 -InstanceName "work"
 ```
 
-Removes the desktop shortcut and launcher. Asks before deleting the
-user-data-dir (so chat history isn't lost by accident). Pass `-KeepUserData` to
-keep the data unconditionally; pass `-Force` to skip prompts.
+Removes the desktop shortcut and asks before deleting the user-data-dir (so
+chat history isn't lost by accident). If the instance is still running,
+uninstall identifies its Electron processes by command-line and offers to
+stop them so the user-data-dir can be deleted.
+
+Flags:
+- `-KeepUserData` — keep chat history etc., delete only the shortcut
+- `-Force` — skip prompts (use for scripting; will force-stop processes)
+- `-RemoveGlobal` — also remove the shared junction, .bat, and scheduled
+  task. Only pass this when removing your **last** instance.
 
 ---
 
@@ -142,11 +159,31 @@ keep the data unconditionally; pass `-Force` to skip prompts.
    you want — global config and the agent's memory travel with you, while
    sessions/auth are isolated.
 
-5. **Why a self-healing launcher.** The desktop `.lnk` has to hardcode the
-   exact Claude.exe path including its version number. When Claude updates,
-   that path is gone. The launcher script in `%USERPROFILE%\.claude-dual-launcher\`
-   re-scans `WindowsApps\Claude_*` at every run, so it always finds the
-   current install regardless of version.
+5. **Why the junction + scheduled task.** The desktop `.lnk` cannot hardcode
+   a versioned Claude.exe path — every Claude update breaks it. Earlier
+   versions of this skill tried two other approaches that both failed in
+   the field:
+
+   - **v1.0** targeted `Claude.exe` directly with a version-pinned path.
+     The shortcut died on every Claude update and had to be manually
+     re-pointed.
+   - **v1.1** targeted `powershell.exe` with `-File <self-healing-launcher.ps1>`.
+     Synthetic tests passed, but real-world double-clicks were silently
+     blocked by heuristic antivirus rules that flag `.lnk` command lines
+     containing `powershell.exe ... -ExecutionPolicy Bypass` as a
+     known living-off-the-land malware pattern. Plus the icon couldn't be
+     read from the WindowsApps directory through a non-packaged-app
+     activation path, so the shortcut showed a generic white "missing"
+     icon. Reverted in commit [`0ed1b07`](../../commit/0ed1b07).
+
+   **v1.2 (current)** sidesteps both pitfalls by working at the filesystem
+   layer. `current\Claude.exe` is a path that doesn't change between
+   versions — its target is an NTFS junction (essentially a symlink for
+   directories) that gets re-pointed by a pure-cmd `.bat` driven by Task
+   Scheduler on every logon. The `.lnk` itself doesn't reference PowerShell
+   or scripts in any way, so AV heuristics ignore it. The `.bat` uses only
+   native Windows commands (`dir`, `mklink`, `rmdir`) and the task is
+   registered with `schtasks.exe` — none of these are AV-sensitive.
 
 ## FAQ
 

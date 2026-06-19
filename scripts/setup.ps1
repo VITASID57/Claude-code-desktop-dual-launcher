@@ -1,23 +1,29 @@
 # setup.ps1 - Create a new Claude Desktop instance with its own user-data-dir
 #
+# v1.2 architecture (NTFS junction + scheduled task):
+#   - All instances share a single NTFS junction at:
+#       %USERPROFILE%\.claude-dual-launcher\current  ->  <latest>\Claude_*\app
+#   - The desktop shortcut for each instance targets:
+#       %USERPROFILE%\.claude-dual-launcher\current\Claude.exe
+#     This path is invariant across Claude updates because the junction
+#     absorbs the version change.
+#   - A user-level Windows Task Scheduler task runs refresh-junction.bat on
+#     every user logon, so the junction always points at the freshly-installed
+#     Claude.exe even after Claude auto-updates.
+#   - No PowerShell or VBS appears in the shortcut, the .bat, or the task
+#     command line, so heuristic antivirus (Defender, 火绒, 360, etc.) does
+#     not flag any part of this chain.
+#
 # Usage:
 #   .\setup.ps1                              # creates instance "secondary"
-#   .\setup.ps1 -InstanceName "work"         # custom name
+#   .\setup.ps1 -InstanceName "work"
 #   .\setup.ps1 -InstanceName "work" -SkipLaunch
-#
-# What it does:
-#   1. Locates Claude.exe in C:\Program Files\WindowsApps\Claude_*\
-#   2. Creates a separate user-data-dir under %APPDATA%\Claude-<name>
-#   3. Deploys a self-healing launcher script to %USERPROFILE%\.claude-dual-launcher\
-#   4. Creates a desktop shortcut "Claude (<name>).lnk"
-#   5. Launches the new instance (skip with -SkipLaunch)
+#   .\setup.ps1 -InstanceName "work" -Force
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
     [string]$InstanceName = "secondary",
-
-    [string]$InstallDir = (Join-Path $env:USERPROFILE ".claude-dual-launcher"),
 
     [string]$UserDataRoot = $env:APPDATA,
 
@@ -43,86 +49,117 @@ if ($InstanceName -notmatch '^[A-Za-z0-9_\-]+$') {
     exit 1
 }
 
+# --- Fixed paths --------------------------------------------------------------
+$installDir   = Join-Path $env:USERPROFILE '.claude-dual-launcher'
+$junctionPath = Join-Path $installDir 'current'
+$refreshBat   = Join-Path $installDir 'refresh-junction.bat'
+$junctionExe  = Join-Path $junctionPath 'Claude.exe'
+$taskName     = 'ClaudeDualLauncher-JunctionRefresh'
+
 $shortcutName = "Claude ($InstanceName).lnk"
 $shortcutPath = Join-Path $DesktopDir $shortcutName
 $userDataDir  = Join-Path $UserDataRoot "Claude-$InstanceName"
-$launcherPath = Join-Path $InstallDir "launch-$InstanceName.ps1"
 
 Write-Host ""
 Write-Host "Claude Desktop dual-launcher - setup" -ForegroundColor White
 Write-Host "Instance name : $InstanceName"
 Write-Host "User-data-dir : $userDataDir"
-Write-Host "Launcher path : $launcherPath"
 Write-Host "Shortcut path : $shortcutPath"
 Write-Host ""
 
-# --- Locate Claude.exe --------------------------------------------------------
+# --- Locate Claude.exe (initial install check + for icon path) ---------------
 Write-Step "Locating Claude.exe under C:\Program Files\WindowsApps\Claude_*\app\"
-$claudeExe = Get-ChildItem 'C:\Program Files\WindowsApps\' -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue |
+$claudeAppDir = Get-ChildItem 'C:\Program Files\WindowsApps\' -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending |
-    ForEach-Object { Join-Path $_.FullName 'app\Claude.exe' } |
-    Where-Object { Test-Path $_ } |
+    ForEach-Object { Join-Path $_.FullName 'app' } |
+    Where-Object { Test-Path (Join-Path $_ 'Claude.exe') } |
     Select-Object -First 1
 
-if (-not $claudeExe) {
+if (-not $claudeAppDir) {
     Write-Err "Claude.exe not found under C:\Program Files\WindowsApps\Claude_*\."
     Write-Err "Install Claude Desktop from the Microsoft Store first, then re-run."
     exit 1
 }
+$claudeExe = Join-Path $claudeAppDir 'Claude.exe'
 Write-OK "Found: $claudeExe"
 
-# --- Check for existing instance ----------------------------------------------
+# --- Check for existing instance ---------------------------------------------
 if ((Test-Path $userDataDir) -and -not $Force) {
     Write-Warn "user-data-dir already exists: $userDataDir"
-    Write-Warn "An instance named '$InstanceName' may already be set up."
-    Write-Warn "Pass -Force to overwrite the shortcut + launcher anyway (existing data is preserved)."
+    Write-Warn "Instance '$InstanceName' may already be set up."
+    Write-Warn "Pass -Force to refresh the shortcut + global infrastructure anyway (existing data preserved)."
     $answer = Read-Host "Continue? (y/N)"
-    if ($answer -ne 'y' -and $answer -ne 'Y') {
-        Write-Host "Aborted."
-        exit 0
-    }
+    if ($answer -ne 'y' -and $answer -ne 'Y') { Write-Host "Aborted."; exit 0 }
 }
 
-# --- Create install dir + deploy launcher ------------------------------------
-Write-Step "Preparing install directory: $InstallDir"
-if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+# --- Ensure install dir + deploy refresh-junction.bat ------------------------
+Write-Step "Preparing install directory: $installDir"
+if (-not (Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir -Force | Out-Null }
 
-$launcherTemplatePath = Join-Path $PSScriptRoot 'launch.ps1'
-if (-not (Test-Path $launcherTemplatePath)) {
-    Write-Err "Launcher template not found next to setup.ps1: $launcherTemplatePath"
+$bundledBat = Join-Path $PSScriptRoot 'refresh-junction.bat'
+if (-not (Test-Path $bundledBat)) {
+    Write-Err "Bundled refresh-junction.bat not found at: $bundledBat"
     exit 1
 }
+Copy-Item -Path $bundledBat -Destination $refreshBat -Force
+Write-OK "Deployed: $refreshBat"
 
-Write-Step "Deploying launcher: $launcherPath"
-$launcherContent = Get-Content $launcherTemplatePath -Raw
-$launcherContent = $launcherContent -replace '__USER_DATA_DIR__', [Regex]::Escape($userDataDir).Replace('\\', '\')
-$launcherContent = $launcherContent -replace '__INSTANCE_NAME__', $InstanceName
-Set-Content -Path $launcherPath -Value $launcherContent -Encoding UTF8
-Write-OK "Launcher written"
+# --- Create / refresh the NTFS junction --------------------------------------
+Write-Step "Creating NTFS junction: $junctionPath -> $claudeAppDir"
+if (Test-Path $junctionPath) {
+    # rmdir on a junction unlinks it, does NOT recurse into target
+    (Get-Item $junctionPath).Delete()
+}
+New-Item -ItemType Junction -Path $junctionPath -Target $claudeAppDir -ErrorAction Stop | Out-Null
+Write-OK "Junction ready"
+
+# --- Register the user-level scheduled task ----------------------------------
+# schtasks.exe writes "ERROR: ..." to stderr when the task doesn't exist; under
+# PowerShell 5.1 + $ErrorActionPreference='Stop', that gets wrapped as a
+# NativeCommandError and aborts the whole script. So we drop EAP to Continue
+# around the call and rely on $LASTEXITCODE instead. /Create /F is itself
+# idempotent (force-overwrite), so we don't need a prior /Delete.
+Write-Step "Registering scheduled task: $taskName (logon trigger)"
+$savedEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$res = & schtasks.exe /Create /TN $taskName /TR "`"$refreshBat`"" /SC ONLOGON /F 2>&1
+$schtasksOk = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $savedEAP
+
+if (-not $schtasksOk) {
+    Write-Err "schtasks /Create failed:"
+    $res | ForEach-Object { Write-Err "  $_" }
+    exit 1
+}
+Write-OK "Task registered"
 
 # --- Create desktop shortcut --------------------------------------------------
+# Shortcut targets Claude.exe through the junction. Because the junction is
+# refreshed on every logon, the .lnk Target stays valid across Claude updates.
+# Icon is loaded through the same junction path, so the desktop icon also
+# survives updates (no white "missing icon" glyph).
 Write-Step "Creating desktop shortcut: $shortcutName"
 $WshShell = New-Object -ComObject WScript.Shell
 $shortcut = $WshShell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath       = $claudeExe
+$shortcut.TargetPath       = $junctionExe
 $shortcut.Arguments        = "--user-data-dir=`"$userDataDir`""
-$shortcut.WorkingDirectory = Split-Path $claudeExe -Parent
-$shortcut.IconLocation     = "$claudeExe,0"
-$shortcut.Description      = "Launch Claude Desktop with a separate user-data-dir ($InstanceName)"
+$shortcut.WorkingDirectory = $junctionPath
+$shortcut.IconLocation     = "$junctionExe,0"
+$shortcut.Description      = "Launch Claude Desktop (instance: $InstanceName) - junction-based, survives Claude updates"
 $shortcut.Save()
 Write-OK "Shortcut created"
 
 # --- Summary ------------------------------------------------------------------
 Write-Host ""
 Write-Host "==== Done ====" -ForegroundColor Green
-Write-Host "Double-click the desktop shortcut to launch the '$InstanceName' instance."
-Write-Host "If Claude updates and the shortcut breaks, run the self-healing launcher:"
-Write-Host "  $launcherPath" -ForegroundColor Yellow
+Write-Host "Double-click '$shortcutName' on the desktop to launch the '$InstanceName' instance."
+Write-Host "Each Claude update is absorbed by the junction + logon task - you don't"
+Write-Host "have to do anything when Claude auto-updates."
 Write-Host ""
 
 # --- Optionally launch --------------------------------------------------------
 if (-not $SkipLaunch) {
     Write-Step "Launching new instance..."
-    Start-Process -FilePath $claudeExe -ArgumentList "--user-data-dir=`"$userDataDir`""
+    Start-Process -FilePath $junctionExe -ArgumentList "--user-data-dir=`"$userDataDir`""
     Write-OK "Launched. A blank Claude window should appear - log in with the second account."
 }
