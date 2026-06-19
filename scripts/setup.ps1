@@ -97,27 +97,34 @@ Write-Step "Deploying launcher: $launcherPath"
 $launcherContent = Get-Content $launcherTemplatePath -Raw
 $launcherContent = $launcherContent -replace '__USER_DATA_DIR__', [Regex]::Escape($userDataDir).Replace('\\', '\')
 $launcherContent = $launcherContent -replace '__INSTANCE_NAME__', $InstanceName
+$launcherContent = $launcherContent -replace '__SHORTCUT_PATH__', [Regex]::Escape($shortcutPath).Replace('\\', '\')
 Set-Content -Path $launcherPath -Value $launcherContent -Encoding UTF8
 Write-OK "Launcher written"
 
 # --- Create desktop shortcut --------------------------------------------------
+# The shortcut targets powershell.exe + the launcher script (NOT Claude.exe
+# directly). The launcher re-scans WindowsApps\Claude_* at every run, so the
+# shortcut keeps working even after Claude updates and changes its version
+# folder. Icon is still pointed at Claude.exe so the shortcut shows Claude's
+# spark icon, not the PowerShell icon.
 Write-Step "Creating desktop shortcut: $shortcutName"
+$powershellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $WshShell = New-Object -ComObject WScript.Shell
 $shortcut = $WshShell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath       = $claudeExe
-$shortcut.Arguments        = "--user-data-dir=`"$userDataDir`""
-$shortcut.WorkingDirectory = Split-Path $claudeExe -Parent
+$shortcut.TargetPath       = $powershellExe
+$shortcut.Arguments        = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
+$shortcut.WorkingDirectory = Split-Path $launcherPath -Parent
 $shortcut.IconLocation     = "$claudeExe,0"
-$shortcut.Description      = "Launch Claude Desktop with a separate user-data-dir ($InstanceName)"
+$shortcut.Description      = "Launch Claude Desktop (instance: $InstanceName) - survives Claude updates"
 $shortcut.Save()
-Write-OK "Shortcut created"
+Write-OK "Shortcut created (self-healing via launcher)"
 
 # --- Summary ------------------------------------------------------------------
 Write-Host ""
 Write-Host "==== Done ====" -ForegroundColor Green
 Write-Host "Double-click the desktop shortcut to launch the '$InstanceName' instance."
-Write-Host "If Claude updates and the shortcut breaks, run the self-healing launcher:"
-Write-Host "  $launcherPath" -ForegroundColor Yellow
+Write-Host "The shortcut goes through the launcher script, so it auto-detects the"
+Write-Host "latest Claude version and keeps working after Claude updates."
 Write-Host ""
 
 # --- Optionally launch --------------------------------------------------------
