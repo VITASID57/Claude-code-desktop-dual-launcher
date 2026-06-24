@@ -1,14 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
-chcp 65001 >nul
 
 REM refresh-junction.bat
-REM Re-points %USERPROFILE%\.claude-dual-launcher\current at the latest
-REM installed Claude_<version>\app under WindowsApps.
+REM Re-points the junction at the latest installed Claude under WindowsApps.
 REM
-REM Pure cmd / mklink - no PowerShell, no VBS, no WScript - so heuristic
-REM antivirus tools (Defender, huorong, 360, etc.) don't flag it as a
-REM PowerShell-living-off-the-land vector. Verified against 火绒 2026-06-19.
+REM IMPORTANT 1: do NOT add chcp 65001. UTF-8 code page breaks cmd delayed
+REM expansion; the !LATEST! token stops expanding, mklink silently creates
+REM a junction to the literal string "!LATEST!", every shortcut dies.
+REM Found the hard way 2026-06-20.
+REM
+REM IMPORTANT 2: this file MUST be saved as ASCII or UTF-8 without BOM.
+REM UTF-16 or UTF-8-with-BOM breaks cmd parsing (each line gets mangled,
+REM REM lines are executed as commands, etc).
 
 set "BASE=C:\Program Files\WindowsApps"
 set "JCT=%USERPROFILE%\.claude-dual-launcher\current"
@@ -33,5 +36,5 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [OK] %JCT% -^> !LATEST!
+echo [OK] %JCT% pointed at !LATEST!
 exit /b 0

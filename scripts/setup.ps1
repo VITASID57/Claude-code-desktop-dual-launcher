@@ -114,24 +114,51 @@ New-Item -ItemType Junction -Path $junctionPath -Target $claudeAppDir -ErrorActi
 Write-OK "Junction ready"
 
 # --- Register the user-level scheduled task ----------------------------------
-# schtasks.exe writes "ERROR: ..." to stderr when the task doesn't exist; under
-# PowerShell 5.1 + $ErrorActionPreference='Stop', that gets wrapped as a
-# NativeCommandError and aborts the whole script. So we drop EAP to Continue
-# around the call and rely on $LASTEXITCODE instead. /Create /F is itself
-# idempotent (force-overwrite), so we don't need a prior /Delete.
-Write-Step "Registering scheduled task: $taskName (logon trigger)"
+# Two triggers so the junction stays fresh in all real-world cases:
+#   1. AtLogOn  - catches the common case (Claude updates between sessions)
+#   2. Daily 9am - catches mid-session updates (Claude updated while user was
+#                  already logged in; would otherwise wait for next reboot)
+# Register-ScheduledTask is used instead of schtasks.exe because schtasks
+# can only register one trigger per /Create call.
+Write-Step "Registering scheduled task: $taskName (logon + daily 9am)"
 $savedEAP = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-$res = & schtasks.exe /Create /TN $taskName /TR "`"$refreshBat`"" /SC ONLOGON /F 2>&1
-$schtasksOk = ($LASTEXITCODE -eq 0)
+& schtasks.exe /Delete /TN $taskName /F 2>&1 | Out-Null
 $ErrorActionPreference = $savedEAP
 
-if (-not $schtasksOk) {
-    Write-Err "schtasks /Create failed:"
-    $res | ForEach-Object { Write-Err "  $_" }
+try {
+    $taskAction   = New-ScheduledTaskAction -Execute $refreshBat
+    $trigLogon    = New-ScheduledTaskTrigger -AtLogOn
+    $trigDaily    = New-ScheduledTaskTrigger -Daily -At '9am'
+    $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Action $taskAction `
+        -Trigger @($trigLogon, $trigDaily) `
+        -Settings $taskSettings `
+        -Description "Re-points the Claude dual-launcher junction at the latest installed Claude. Runs at every logon and once a day at 9 AM." `
+        -Force | Out-Null
+    Write-OK "Task registered (logon + daily 9am triggers)"
+} catch {
+    Write-Err "Register-ScheduledTask failed: $($_.Exception.Message)"
     exit 1
 }
-Write-OK "Task registered"
+
+# Sanity-check: drive the .bat once so the junction is verified before the
+# .lnk is created. Catches things like a broken .bat (we hit a chcp-65001
+# delayed-expansion bug here on 2026-06-20) or wrong-encoding .bat files
+# before the user ever double-clicks anything.
+Write-Step "Sanity check: running refresh-junction.bat once"
+& cmd.exe /c $refreshBat | Out-Null
+$junctionTarget = (Get-Item $junctionPath -ErrorAction SilentlyContinue).Target
+if (-not $junctionTarget -or -not (Test-Path $junctionTarget)) {
+    Write-Err "Junction did not resolve to a real path after running .bat:"
+    Write-Err "  target = $junctionTarget"
+    Write-Err "Check $refreshBat for encoding (must be ASCII or UTF-8 no BOM) and"
+    Write-Err "that it doesn't have ``chcp 65001`` (breaks cmd delayed expansion)."
+    exit 1
+}
+Write-OK "Junction resolves: $junctionTarget"
 
 # --- Create desktop shortcut --------------------------------------------------
 # Shortcut targets Claude.exe through the junction. Because the junction is
